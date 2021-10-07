@@ -1,0 +1,57 @@
+/*
+ * Copyright (c) 2021 Tero Hänninen.
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+private:
+
+define STDERR_FILENO = 2;   // <unistd.h>
+
+extern(C) void  exit(int status);                               // <stdlib.h>
+extern(C) isz   write(int fd, const void* buf, usz count);      // <unistd.h>
+
+/*
+ * This is provided for the compiler which generates calls to it for assert and
+ * other failures.
+ */
+extern(C) void __gordon_failure(const ubyte* msg, const ubyte* path, int line)
+{
+    define LINE  = "\n----\n";
+    define CLN   = ":";
+    define FAIL  = ": failure: ";
+    define LF    = "\n";
+
+    ubyte[16] buf;
+
+    int n = write_unsigned_int(buf[0..$], line);
+
+    write(STDERR_FILENO, LINE.ptr, LINE.len);
+    write(STDERR_FILENO, path, strlen(path));
+    write(STDERR_FILENO, CLN.ptr, CLN.len);
+    write(STDERR_FILENO, &buf[buf.len - n], n);
+    write(STDERR_FILENO, FAIL.ptr, FAIL.len);
+    write(STDERR_FILENO, msg, strlen(msg));
+    write(STDERR_FILENO, LF.ptr, LF.len);
+
+    exit(1);
+}
+
+isz strlen(const ubyte* s)
+{
+    const ubyte* s0 = s;
+    while (*s) s++;
+    return s - s0;
+}
+
+int write_unsigned_int(ubyte[] buf, int x)
+{
+    isz i = buf.len;
+
+    while (x) {
+        int d = x % 10;
+        x /= 10;
+        buf[--i] = cast(ubyte) ('0' + d);
+    }
+
+    return cast(int) (buf.len - i);
+}

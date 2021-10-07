@@ -1,0 +1,32 @@
+GNC Compiler archive.
+
+System:
+    Linux x86-64
+
+Linker:
+    gcc (Ubuntu 9.3.0-17ubuntu1~20.04) 9.3.0
+    GNU ld (GNU Binutils for Ubuntu) 2.34
+
+
+Date        Commit      Version     sha1                                        compiler
+------------------------------------------------------------------------------------------------------------------------
+-           -           1.25.1      4dcd09d3813ae4016d5d2355f490a44e11e1c092    ldmd2
+2021-09-07  cb375317    0.1 (D ver) 342637e36f2c5a477c5668acafff03a3f19f207b    gnc-boot
+
+
+Date        Commit      Version     sha1/gnc                                    sha1/libgordon.a
+------------------------------------------------------------------------------------------------------------------------
+2021-09-09  6c9681d2    0.2         b84e82dfcbfbd40d1d594ad4617670985279c9a0    15c56a80ea706ee66600672f4f118e0a130e7a7c
+2021-09-09  0a75a7e5    0.2         a0d1c25c836a5dbced3ee6bc52fb25109b52182b    15c56a80ea706ee66600672f4f118e0a130e7a7c
+2021-09-09  2255fae3    0.2         ec88787912776aae851aa95c250f4877f09c390f    15c56a80ea706ee66600672f4f118e0a130e7a7c
+2021-09-09  f34caaa9    0.2         33cfdc7f137860665d62a84f4c73a29239644235    15c56a80ea706ee66600672f4f118e0a130e7a7c
+2021-09-11  32ba48ac    0.2         9f5378c90e84fc9fb457a5d7245886ecb91b9e33    f604856c909d5c0a5c0ef34c4cc3c8013baf9b73
+2021-09-18  15b8cc1d    0.2         27ea659e72aff3913982fed8258415d318a2bd7c    f604856c909d5c0a5c0ef34c4cc3c8013baf9b73
+2021-09-20  2bdf4085    0.2         4f0d98250bb2bf808bd716f04ee9aebf986a13bb    f0bbe2f2cbea7076927d62fa87905305796c497f
+2021-09-21  d6e40e61    0.2         5bf27a2f6aed1b4a06c0c8364b31ee54eefe90cf    f0bbe2f2cbea7076927d62fa87905305796c497f
+2021-09-25  315d418575  0.2         5f6fddd0f49b1d535a8da9e620909a2b8773945b    f0bbe2f2cbea7076927d62fa87905305796c497f
+2021-09-30  932563b872  0.2         4ee52ff0ce11a5d6011e1a6446ff7f7a8d8d79d6    f0bbe2f2cbea7076927d62fa87905305796c497f
+2021-10-02  184a098ecd  0.2         812b67e075f5b9419bfa31132e9c446a2f4c46ad    f0bbe2f2cbea7076927d62fa87905305796c497f
+2021-10-03  8a1ea48499  0.2         459dd0cb66450fad13deab249e4dbb0fdcc4ffa5    f0bbe2f2cbea7076927d62fa87905305796c497f
+2021-10-03  3aac585779  0.2         e303f37b1d7f3b6d36db44b983a9d275d40a40ac    f0bbe2f2cbea7076927d62fa87905305796c497f
+2021-10-07  a615ad0eb7  0.2         141060c3886087e3e1a946160cee40dbd2097d0a    083b2f73982727cb06d807cae5c8d29e37a54ef1

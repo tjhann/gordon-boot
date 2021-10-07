@@ -1,0 +1,20 @@
+/*
+ * Copyright (c) 2021 Tero Hänninen.
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+extern(C) {
+
+// stdlib.h ---------------------------------------------------------------
+
+void*   malloc(usz size);
+void*   calloc(usz nmemb, usz size);
+void*   realloc(void* ptr, usz size);
+void    free(const void* ptr);
+
+// string.h ---------------------------------------------------------------
+
+void* memcpy(void* dest, const void* src, usz n);
+void* memset(void* s, int c, usz n);
+
+} // extern(C)
