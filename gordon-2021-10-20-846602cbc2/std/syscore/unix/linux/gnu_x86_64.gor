@@ -1,0 +1,44 @@
+/*
+ * Copyright (c) 2021 Tero Hänninen.
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+import self.syscore.unix;
+
+/*
+#setup[ptr64] { // The regular 64-bit abi, not x32.
+    alias c_long = i64;
+    alias c_ulong = u64;
+}
+
+alias nlink_t = u64;
+alias blksize_t = i64;
+
+alias ino_t = u64;
+alias off_t = i64;
+alias blkcnt_t = i64;
+alias time_t = i64;
+
+struct stat_t {
+   dev_t     st_dev;
+   ino_t     st_ino;
+   nlink_t   st_nlink;
+   mode_t    st_mode;
+   uid_t     st_uid;
+   gid_t     st_gid;
+   c_uint    __pad0;
+   dev_t     st_rdev;
+   off_t     st_size;
+   blksize_t st_blksize;
+   blkcnt_t  st_blocks;
+
+   time_t    st_atime;
+   i64       st_atime_nsec;
+   time_t    st_mtime;
+   i64       st_mtime_nsec;
+   time_t    st_ctime;
+   i64       st_ctime_nsec;
+
+   i64[3]    __unused;
+}
+*/
