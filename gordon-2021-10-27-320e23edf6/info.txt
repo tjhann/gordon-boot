@@ -1,0 +1,4 @@
+GNC 0.2 / gordon-2021-10-27-320e23edf6:
+
+5d4d98bb7901c8ec8141605187c16e4dd3d564d4 gnc
+7729a872985bf2d80e3b3a1a0d6e1fe3bbeb614e libgordon.a

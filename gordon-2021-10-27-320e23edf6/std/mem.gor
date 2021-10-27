@@ -1,0 +1,21 @@
+/*
+ * Copyright (c) 2021 Tero Hänninen.
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+import self.syscore;
+
+public:
+
+#setup[unix] {
+    macro alloc(size)             { calloc(size, 1)                      }
+    macro alloc1(T)               { cast(T*) calloc(1, T.sizeof)         }
+    macro allocn(T, n)            { cast(T*) calloc(n, T.sizeof)         }
+    macro allocs(T, n)            { (cast(T*) calloc(n, T.sizeof))[0..n] }
+    macro xmalloc(size)           { malloc(size)                         }
+    macro xcalloc(n, msize)       { calloc(n, msize)                     }
+    macro xrealloc(p, size)       { realloc(cast(void*) p, size)         }
+    macro xfree(p)                { free(cast(void*) p)                  }
+    macro xmemcpy(dst, src, size) { memcpy(dst, src, size)               }
+    macro xmemset(p, c, size)     { memset(p, c, size)                   }
+}

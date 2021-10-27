@@ -1,0 +1,97 @@
+/*
+ * Copyright (c) 2020-2021 Tero Hänninen.
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+public:
+
+struct Any {
+    const(TypeInfo)*    info;
+    void*               data;
+}
+
+enum TKIND {
+    VOID,
+    BOOL,
+    BYTE,
+    UBYTE,
+    SHORT,
+    USHORT,
+    INT,
+    UINT,
+    I64,
+    U64,
+    FLOAT,
+    DOUBLE,
+
+    POINTER,
+    DYNA,
+    SLICE,
+    FIXA,
+
+    ENUM,
+    STRUCT,
+    UNION,
+    FN,
+}
+
+struct TypeInfo {
+    TKIND               kind;
+    ubyte               alignment;
+    int                 size;
+}
+
+struct PointerTI {
+    embed               TypeInfo;
+    const(TypeInfo)*    inner;
+}
+
+struct SliceTI {
+    embed               TypeInfo;
+    const(TypeInfo)*    inner;
+}
+
+struct DynaTI {
+    embed               TypeInfo;
+    const(TypeInfo)*    inner;
+}
+
+struct FixaTI {
+    embed               TypeInfo;
+    const(TypeInfo)*    inner;
+    int                 len;
+}
+
+struct EnumTI {
+    embed               TypeInfo;
+    const(ubyte)[]      name;
+    const(TypeInfo)*    basetype;
+    const(ubyte[])[]    membernames;
+    void*               membervalues;
+}
+
+struct AggTI {
+    embed               TypeInfo;
+    const(ubyte)[]      name;
+    const(FieldTI)[]    members;
+    const(TypeInfo)*    basetype;
+}
+
+struct FieldTI {
+    const(ubyte)[]      name;
+    const(TypeInfo)*    type;
+    int                 offset;
+}
+
+enum VARIADIC { NOT, GORDON, C }
+
+struct FuncTI {
+    embed               TypeInfo;
+    const(TypeInfo)*    retty;
+    const(ParamTI)[]    params;
+    VARIADIC            variadic;
+}
+
+struct ParamTI {
+    const(TypeInfo)*    type;
+}
