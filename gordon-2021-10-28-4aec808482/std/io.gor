@@ -1,0 +1,85 @@
+/*
+ * Copyright (c) 2021 Tero Hänninen.
+ * SPDX-License-Identifier: BSD-2-Clause
+ */
+
+import self.syscore;
+
+public:
+
+enum MODE {
+    R,      // open for reading, set position to beginning
+    W,      // open for writing, create or truncate
+    A,      // open for writing, create if needed, set position to end
+    RW,     // open for reading and writing, set position to beginning
+    WR,     // open for reading and writing, create or truncate
+    AR,     // open for reading and writing, create if needed, set position to end
+}
+
+/*
+ * This may gain members over time; a default case in switches will avoid breakage.
+ */
+enum ERROR {
+    NONE,
+    OTHER,
+    PERM,
+    ISDIR,
+    WRITE,
+}
+
+#setup[unix] {
+    private const(ubyte*[6]) MODEWORDS = [
+        MODE.R  : "rb",
+        MODE.W  : "wb",
+        MODE.A  : "ab",
+        MODE.RW : "rb+",
+        MODE.WR : "wb+",
+        MODE.AR : "ab+",
+    ];
+
+    struct File {
+        FILE*   f;
+    }
+
+    File open(const ubyte[] path, MODE mode, out ERROR e)
+    {
+        FILE* f = fopen(path.ptr, MODEWORDS[mode]);
+
+        if (!f)
+            e = errno2ioerror(get_errno());
+
+        return {f};
+    }
+
+    void close(File f, out ERROR e)
+    {
+        if (fclose(f.f) != 0)
+            e = errno2ioerror(get_errno());
+    }
+
+    isz write(File f, const ubyte[] buf, out ERROR e)
+    {
+        isz n = fwrite(buf.ptr, 1, buf.len, f.f);
+
+        if (n < buf.len)
+            e = ERROR.WRITE;
+
+        return n;
+    }
+
+    private ERROR errno2ioerror(int errno)
+    {
+        switch (errno) {
+        case EACCES:
+        case EPERM:
+            return ERROR.PERM;
+        case EISDIR:
+            return ERROR.ISDIR;
+        default:
+            return ERROR.OTHER;
+        }
+    }
+
+    #setup[linux]
+    private macro get_errno() { *__errno_location() }
+}
