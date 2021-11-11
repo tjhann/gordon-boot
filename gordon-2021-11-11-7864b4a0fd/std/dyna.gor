@@ -1,0 +1,183 @@
+/*
+ * Copyright (c) 2021 Tero Hänninen.
+ * SPDX-License-Identifier: BSD-2-Clause
+ *
+ * Functionality for the built-in dynamic array type. The arrays are
+ * kept null terminated if the elements are 1 byte in size.
+ */
+
+import self.mem;
+
+public:
+
+macro new(E, len)       { cast(E~) da_new(len, E.sizeof)       }
+macro reserve(E, cap)   { cast(E~) da_reserve(cap, E.sizeof)   }
+macro empty(E)          { cast(E~) &EMPTY.nb                   }
+
+void dispose(E)(ref E~ self)
+{
+    if (!self) return;
+
+    Head* hp = da_headptr(self);
+
+    if (hp.xcap & EMPTY_BIT == 0)
+        xfree(hp);
+
+    self = null;
+}
+
+E pop(E)(ref E~ self)
+{
+    assert(self && self.len > 0);
+    return (cast(E*) self)[--da_headptr(self).len];
+}
+
+void push(E)(ref E~ self, E x)
+{
+    define  ESZ = E.sizeof;
+    define  NB  = ESZ == 1; // null byte?
+    Head*   hp;
+
+    hp = da_headptr(self);
+    isz cap = hp_cap(hp);
+
+    if (hp.len == cap) {
+        if (hp.xcap & EMPTY_BIT) {
+            self = cast(E~) da_reserve(DEFAULT_INIT_CAP, ESZ);
+            hp = da_headptr(self);
+        } else {
+            isz newcap = cap ? 2 * cap : DEFAULT_INIT_CAP;
+            da_realloc(&self, &hp, newcap);
+            xmemset(hp.data.ptr + hp.len * ESZ, 0x00, (newcap - hp.len) * ESZ);
+        }
+    }
+
+    // For now, there is no way to cast away const of E, so do a memcpy.
+    //(cast(E*) hp.data.ptr)[hp.len++] = x;
+    xmemcpy(hp.data.ptr + (hp.len++) * ESZ, &x, x.sizeof);
+
+    if (NB) hp.data[hp.len * ESZ] = 0x00;
+}
+
+void pusha(E)(ref E~ self, const E[] s)
+{
+    define  ESZ = E.sizeof;
+    define  NB  = ESZ == 1; // null byte?
+    Head*   hp;
+
+    if (!s.len) return;
+
+    hp = da_headptr(self);
+    isz newlen = hp.len + s.len;
+    isz cap    = hp_cap(hp);
+
+    if (newlen > cap) {
+        isz newcap = cap ? 2 * cap : DEFAULT_INIT_CAP;
+
+        while (newcap < newlen)
+            newcap *= 2;
+
+        if (hp.xcap & EMPTY_BIT) {
+            self = cast(E~) da_reserve(newcap, ESZ);
+            hp = da_headptr(self);
+        } else {
+            da_realloc(&self, &hp, newcap);
+            xmemset(hp.data.ptr + newlen * ESZ, 0x00, (newcap - newlen) * ESZ);
+        }
+    }
+
+    xmemcpy(hp.data.ptr + hp.len * ESZ, s.ptr, s.len * ESZ);
+    hp.len = newlen;
+
+    if (NB) hp.data[hp.len * ESZ] = 0x00;
+}
+
+/*
+ * Sets length to newlen, allocating more space as needed. Sets to zero
+ * any added capacity, but not added length.
+ */
+void setlen(E)(ref E~ self, isz newlen)
+{
+    define ESZ = E.sizeof;
+    define NB  = ESZ == 1; // null byte?
+
+    auto hp = da_headptr(self);
+
+    if (hp.xcap & EMPTY_BIT) {
+        if (newlen)
+            self = cast(E~) da_new(newlen, ESZ);
+        return;
+    }
+
+    // No worries about the empty bit here.
+
+    if (newlen <= hp.len) {
+        hp.len = newlen;
+        if (NB) hp.data[newlen * ESZ] = 0x00;
+        return;
+    }
+
+    isz oldlen = hp.len;
+
+    if (newlen <= hp.xcap) {
+        xmemset(hp.data.ptr + oldlen * ESZ, 0x00, (newlen - oldlen) * ESZ);
+    } else {
+        isz newcap = hp.xcap;
+
+        if (newcap) {
+            while (true) {
+                newcap *= 2;
+                if (newcap >= newlen) break;
+            }
+        } else
+            newcap = (newlen | 0x1) + 1;
+
+        da_realloc(&self, &hp, newcap);
+        xmemset(hp.data.ptr + oldlen * ESZ, 0x00, (newcap - oldlen) * ESZ);
+    }
+
+    hp.len = newlen;
+    if (NB) hp.data[newlen * ESZ] = 0x00;
+}
+
+
+/*********************************/ private: /*********************************/
+
+
+define      DEFAULT_INIT_CAP = 16;
+define usz  EMPTY_BIT        = 1Lu << (usz.sizeof * 8 - 1);
+
+const xHead EMPTY            = { 0, EMPTY_BIT, 0x00 };
+
+struct xHead {
+    isz     len;
+    isz     xcap;
+    ubyte   nb;     // The null byte.
+}
+
+struct Head {
+    isz     len;
+    isz     xcap;   // Beware! The MSB indicates whether this da is EMPTY.
+    byte[0] data;
+}
+
+macro da_new(len, esz)      { __da_new(len, len, da_alloc_size(len, esz))   }
+macro da_reserve(cap, esz)  { __da_new(  0, cap, da_alloc_size(cap, esz))   }
+macro da_alloc_size(n, esz) { Head.sizeof + n * esz + (esz == 1)    }
+macro da_headptr(da)        { (cast(Head*) da) - 1                  }
+macro hp_cap(hp)            { hp.xcap & ~EMPTY_BIT                  }
+
+void* __da_new(isz len, isz cap, isz size)
+{
+    Head* hp = mem.alloc(size);
+    hp.len = len;
+    hp.xcap = cap;
+    return &hp.data;
+}
+
+void da_realloc(E)(ref E~ da, ref Head* hp, isz newcap)
+{
+    hp.xcap = newcap;
+    hp = xrealloc(hp, da_alloc_size(newcap, E.sizeof));
+    da = cast(E~) (hp + 1);
+}
