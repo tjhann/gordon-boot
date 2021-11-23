@@ -1,0 +1,211 @@
+/*
+ * Copyright (c) 2021 Tero Hänninen.
+ * SPDX-License-Identifier: MIT
+ *
+ * Derived from Rust's core::num::dec2flt.
+ *
+ * The fast path algorithm using machine-sized integers and floats.
+ *
+ * The fast path crucially depends on arithmetic being rounded to the
+ * correct number of bits without any intermediate rounding. On x86
+ * (without SSE or SSE2) this requires the precision of the x87 FPU
+ * stack to be changed so that it directly rounds to 64 or 32 bit.
+ *
+ * The `set_precision` function takes care of setting the precision on
+ * architectures which require it by changing the global state (like the
+ * control word of the x87 FPU).
+ *
+ * TODO: Make `set_precision` function.
+ */
+
+import self.s2fp.common;
+import self.s2fp.lemire; // full_multiplication, to implement checked_mul with
+
+define F32_MIN_EXPONENT_FAST_PATH = -10; // assuming FLT_EVAL_METHOD = 0
+define F32_MAX_EXPONENT_FAST_PATH = 10;
+define F32_MAX_MANTISSA_FAST_PATH = 2Lu << F32_MANTISSA_EXPLICIT_BITS;
+define F32_MAX_EXPONENT_DISGUISED_FAST_PATH = 17;
+
+define F64_MIN_EXPONENT_FAST_PATH = -22; // assuming FLT_EVAL_METHOD = 0
+define F64_MAX_EXPONENT_FAST_PATH = 22;
+define F64_MAX_MANTISSA_FAST_PATH = 2Lu << F64_MANTISSA_EXPLICIT_BITS;
+define F64_MAX_EXPONENT_DISGUISED_FAST_PATH = 37;
+
+const float[16] TABLE32 =
+    [1.0e0, 1.0e1, 1.0e2, 1.0e3, 1.0e4, 1.0e5, 1.0e6, 1.0e7,
+     1.0e8, 1.0e9, 1.0e10, 0.0, 0.0, 0.0, 0.0, 0.0];
+
+const double[32] TABLE64 = [
+     1.0e0,  1.0e1,  1.0e2,  1.0e3,  1.0e4,  1.0e5,  1.0e6,  1.0e7,
+     1.0e8,  1.0e9, 1.0e10, 1.0e11, 1.0e12, 1.0e13, 1.0e14, 1.0e15,
+    1.0e16, 1.0e17, 1.0e18, 1.0e19, 1.0e20, 1.0e21, 1.0e22,    0.0,
+       0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
+];
+
+double pow10_fastpath64(usz exponent)
+{
+    return TABLE64[exponent & 31];
+}
+
+float pow10_fastpath32(usz exponent)
+{
+    return TABLE32[exponent & 15];
+}
+
+const u64[16] INT_POW10 = [
+    1,
+    10,
+    100,
+    1000,
+    10000,
+    100000,
+    1000000,
+    10000000,
+    100000000,
+    1000000000,
+    10000000000,
+    100000000000,
+    1000000000000,
+    10000000000000,
+    100000000000000,
+    1000000000000000,
+];
+
+struct Number {
+    u64 mantissa;
+    int exponent;
+    bool negative;
+    bool many_digits;
+}
+
+u64 checked_mul(u64 x, u64 y, out bool overflow)
+{
+    u64 lo, hi;
+    full_multiplication(x, y, &lo, &hi);
+    overflow = hi > 0;
+    return lo;
+}
+
+// Detect if the float can be accurately reconstructed from native floats.
+//
+bool is_fastpath64(Number* num)
+{
+    return F64_MIN_EXPONENT_FAST_PATH <= num.exponent
+        && num.exponent <= F64_MAX_EXPONENT_DISGUISED_FAST_PATH
+        && num.mantissa <= F64_MAX_MANTISSA_FAST_PATH
+        && !num.many_digits;
+}
+
+// Detect if the float can be accurately reconstructed from native floats.
+//
+bool is_fastpath32(Number* num)
+{
+    return F32_MIN_EXPONENT_FAST_PATH <= num.exponent
+        && num.exponent <= F32_MAX_EXPONENT_DISGUISED_FAST_PATH
+        && num.mantissa <= F32_MAX_MANTISSA_FAST_PATH
+        && !num.many_digits;
+}
+
+double to_double(u64 i)
+{
+    assert(i < F64_MAX_MANTISSA_FAST_PATH);
+    return cast(double) i;
+}
+
+float to_float(u64 i)
+{
+    assert(i < F32_MAX_MANTISSA_FAST_PATH);
+    return cast(float) i;
+}
+
+/*
+ * The fast path algorithm using machine-sized integers and floats.
+ *
+ * This works if both the mantissa and the exponent can be exactly
+ * represented as a machine float, since IEEE-754 guarantees no rounding
+ * will occur. There are exceptions: disguised fast-path cases, where we
+ * can shift powers-of-10 from the exponent to the significant digits.
+ */
+double fastpath64(Number* num, out int noluck)
+{
+    #setup[x86 && !sse2] assert(0, "need to set precision of x87 FPU on this arch");
+
+    if (!is_fastpath64(num)) {
+        noluck = true;
+        return 0.0;
+    }
+
+    double value;
+
+    if (num.exponent <= F64_MAX_EXPONENT_FAST_PATH) {
+        // normal fast path
+        value = to_double(num.mantissa);
+        if (num.exponent < 0) {
+            value = value / pow10_fastpath64(cast(usz) -num.exponent);
+        } else {
+            value = value * pow10_fastpath64(cast(usz) num.exponent);
+        }
+    } else {
+        // disguised fast path
+        isz shift = num.exponent - F64_MAX_EXPONENT_FAST_PATH;
+        bool overflow;
+        u64 mant = checked_mul(num.mantissa, INT_POW10[shift], &overflow);
+        if (overflow) {
+            noluck = true;
+            return 0.0;
+        }
+        if (mant > F64_MAX_MANTISSA_FAST_PATH) {
+            noluck = true;
+            return 0.0;
+        }
+        define POW10 = pow10_fastpath64(F64_MAX_EXPONENT_FAST_PATH);
+        value = to_double(mant) * POW10;
+    }
+
+    if (num.negative)
+        value = -value;
+
+    return value;
+}
+
+float fastpath32(Number* num, out int noluck)
+{
+    #setup[x86 && !sse2] assert(0, "need to set precision of x87 FPU on this arch");
+
+    if (!is_fastpath32(num)) {
+        noluck = true;
+        return 0.0;
+    }
+
+    float value;
+
+    if (num.exponent <= F32_MAX_EXPONENT_FAST_PATH) {
+        // normal fast path
+        value = to_float(num.mantissa);
+        if (num.exponent < 0) {
+            value = value / pow10_fastpath32(cast(usz) -num.exponent);
+        } else {
+            value = value * pow10_fastpath32(cast(usz) num.exponent);
+        }
+    } else {
+        // disguised fast path
+        isz shift = num.exponent - F32_MAX_EXPONENT_FAST_PATH;
+        bool overflow;
+        u64 mant = checked_mul(num.mantissa, INT_POW10[shift], &overflow);
+        if (overflow) {
+            noluck = true;
+            return 0.0;
+        }
+        if (mant > F32_MAX_MANTISSA_FAST_PATH) {
+            noluck = true;
+            return 0.0;
+        }
+        define POW10 = pow10_fastpath32(F32_MAX_EXPONENT_FAST_PATH);
+        value = to_float(mant) * POW10;
+    }
+
+    if (num.negative)
+        value = -value;
+
+    return value;
+}

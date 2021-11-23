@@ -1,0 +1,259 @@
+/*
+ * Copyright (c) 2021 Tero Hänninen.
+ * SPDX-License-Identifier: MIT
+ *
+ * Derived from Rust's core::num::dec2flt.
+ */
+
+import self.s2fp.number;
+import self.s2fp.common;
+import self.s2fp.decimal;
+import self.s2fp;    // PF_UNDERSCORE
+
+define u64 SMALLEST_19DIGIT_INT = 100_0000_0000_0000_0000;
+
+double parse_infnan(const ubyte[] s, bool negative, out isz len)
+{
+    if (s.len < 3)
+        return 0.0;
+
+    double x;
+
+    ubyte a = s[0] | 0x20;
+    ubyte b = s[1] | 0x20;
+    ubyte c = s[2] | 0x20;
+
+    if (a == 'n' && b == 'a' && c == 'n') {
+        x = NAN64;
+        len = 3;
+    } else if (a == 'i' && b == 'n' && c == 'f') {
+        x = INF64;
+        len = 3;
+    } else {
+        return 0.0;
+    }
+
+    len += negative;
+    return x * (1 - 2 * negative);
+}
+
+/*
+ * Convert 8 digits, loaded as character bytes in little-endian order.
+ *
+ * This uses the trick where every digit is in [0x030, 0x39],
+ * and therefore can be converted in 3 multiplications, much
+ * faster than the normal 8.
+ *
+ * This is based off the algorithm described in "Fast numeric string to int",
+ * at https://johnnylee-sde.github.io/Fast-numeric-string-to-int/.
+ */
+u64 convert_8digits(u64 v)
+{
+    define u64 MASK = 0x0000_00FF_0000_00FF;
+    define u64 MUL1 = 0x000F_4240_0000_0064;
+    define u64 MUL2 = 0x0000_2710_0000_0001;
+    v -= 0x3030_3030_3030_3030;
+    v = (v * 10) + (v >> 8); // will not overflow, fits in 63 bits
+    u64 v1 = (v & MASK) * MUL1;
+    u64 v2 = ((v >> 16) & MASK) * MUL2;
+    return cast(u64) (cast(uint) ((v1 + v2) >> 32));
+}
+
+/*
+ * Tries to parse 8 digits at a time, 16 total, using a fast algorithm.
+ * Lets overflows happen silently.
+ */
+int parse_8x2_digits(const ubyte[] s, ref u64 x)
+{
+    if (s.len < 8)
+        return 0;
+
+    u64 v = read_u64(s);
+
+    if (!is_8digits(v))
+        return 0;
+
+    x = x * 1_0000_0000 + convert_8digits(v);
+
+    if (s.len < 16)
+        return 8;
+
+    v = read_u64(s[8..$]);
+
+    if (!is_8digits(v))
+        return 8;
+
+    x = x * 1_0000_0000 + convert_8digits(v);
+    return 16;
+}
+
+/*
+ * Parse up to 19 digits (the max that can be stored in a 64-bit integer).
+ * Returns the number of parsed digits (not length).
+ */
+int parse_upto19_digits(ref const ubyte[] s, ref u64 x, uint flags)
+{
+    define USCORE = cast(ubyte) ('_' - '0');
+    isz i;
+    isz u;
+
+    while (x < SMALLEST_19DIGIT_INT && i < s.len) {
+        ubyte d = cast(ubyte) (s[i] - '0');
+
+        if (d < 10)
+            x = x * 10 + d;
+        else if (d == USCORE && (flags & PF_UNDERSCORE))
+            u++;
+        else break;
+
+        i++;
+    }
+
+    s = s[i..$];
+    return cast(int) (i - u);
+}
+
+/*
+ * Parses base 10 digits until a non-digit character is found.
+ * Lets overflows happen silently.
+ */
+int parse_digits(const ubyte[] s, ref u64 x, ref int ndigits, uint flags)
+{
+    int i;
+    int u;
+
+    while (i < s.len) {
+        ubyte dig = cast(ubyte) (s[i] - '0');
+
+        if (dig < 10)
+            x = x * 10 + dig;
+        else if (dig == cast(ubyte) ('_' - '0') && (flags & PF_UNDERSCORE))
+            u++;
+        else break;
+
+        i++;
+    }
+
+    ndigits += i - u;
+    return i;
+}
+
+// Parse explicit exponent of a float.
+//
+bool parse_exponent(ref const ubyte[] s, out int exp)
+{
+    assert(s[0] | 0x20 == 'e');
+    isz i = 1;
+    bool negative = false;
+
+    if (i < s.len) {
+        ubyte c = s[i];
+        negative = c == '-';
+        i += negative | (c == '+');
+    }
+
+    int exponent = 0;
+    isz di = i;
+
+    // saturate before overflow (float64 stores exponent in 11 bits)
+    while (i < s.len) {
+        ubyte digit = cast(ubyte) (s[i] - '0');
+        if (digit >= 10)
+            break;
+        if (exponent < 0x10000)
+            exponent = 10 * exponent + digit;
+        i++;
+    }
+
+    if (i == di)
+        return false;
+
+    s = s[i..$];
+    exp = negative ? -exponent : exponent;
+    return true;
+}
+
+/*
+ * Parse non-special floating point number into
+ * significant digits and the decimal exponent.
+ */
+Number parse_number(const(ubyte[]) start, bool negative, out isz len, uint flags)
+{
+    u64 mantissa = 0;
+    int n_digits = 0;
+
+    isz l = parse_digits(start, &mantissa, &n_digits, flags);
+    auto s = start[l..$];    // dot and the right side of it
+
+    int n_intdigs = n_digits;
+    int exponent = 0;
+
+    if (s.len && s[0] == '.') {
+        s = s[1..$];
+        int ndigs = parse_8x2_digits(s, &mantissa);
+        int n = ndigs;
+        n += parse_digits(s[n..$], &mantissa, &ndigs, flags);
+        s = s[n..$];
+        exponent = -ndigs;
+        n_digits += ndigs;
+    }
+
+    if (n_digits == 0)
+        return {...};
+
+    int expl_exp;   // explicit exponent
+
+    if (s.len && s[0] | 0x20 == 'e' && parse_exponent(&s, &expl_exp))
+        exponent += expl_exp;
+
+    len = start.len - s.len;
+
+    if (n_digits <= 19)
+        return { mantissa, exponent, negative, false };
+
+    // We have 19+ significant digits total (both sides of dot), let's try again.
+
+    mantissa = 0;
+    const ubyte[] ss = start;
+
+    int ndigs = parse_upto19_digits(&ss, &mantissa, flags);
+
+    if (ndigs == 19) {
+        exponent = n_intdigs - 19;
+    } else {
+        // Less than 19 integral digits, so next is '.' and 1+ fractional digit.
+        ss = ss[1..$];
+        exponent = -parse_upto19_digits(&ss, &mantissa, flags);
+    }
+    exponent += expl_exp;   // add back the explicit part
+
+    return { mantissa, exponent, negative, true }; // true = many digits
+}
+
+/*
+ * Parse the significant digits and biased, binary exponent of a float.
+ *
+ * This is a slow algorithm that uses a big-integer representation
+ * of the float. However, it will always determine how to round
+ * the significant digits to the nearest machine float; it can handle
+ * near half-way cases.
+ *
+ * Near half-way cases are halfway between two consecutive machine floats.
+ * For example, the float `16777217.0` has a bitwise representation of
+ * `100000000000000000000000 1`. Rounding to a single-precision float,
+ * the trailing `1` is truncated. Using round-nearest, tie-even, any
+ * value above `16777217.0` must be rounded up to `16777218.0`, while
+ * any value before or equal to `16777217.0` must be rounded down
+ * to `16777216.0`. These near-halfway conversions therefore may require
+ * a large number of digits to unambiguously determine how to round.
+ *
+ * The algorithms described here are based on "Processing Long Numbers Quickly",
+ * available here: <https://arxiv.org/pdf/2101.11408.pdf#section.11>.
+ */
+BiasedFP parse_fallback(const ubyte[] s, out isz len, ref const FPConsts fc,
+                                                             uint flags = 0)
+{
+    Decimal d;
+    len = parse_decimal(s, &d, flags);
+    return decimal_to_biasedfp(&d, &fc);
+}

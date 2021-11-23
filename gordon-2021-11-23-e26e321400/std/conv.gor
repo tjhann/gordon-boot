@@ -1,0 +1,10 @@
+/*
+ * Copyright (c) 2021 Tero Hänninen.
+ * SPDX-License-Identifier: MIT
+ */
+
+import self.s2fp;
+
+public alias PF_UNDERSCORE  = s2fp.PF_UNDERSCORE;
+public alias parsef64       = s2fp.parsef64;
+public alias parsef32       = s2fp.parsef32;

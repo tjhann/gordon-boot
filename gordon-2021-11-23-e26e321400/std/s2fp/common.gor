@@ -1,0 +1,101 @@
+/*
+ * Copyright (c) 2021 Tero Hänninen.
+ * SPDX-License-Identifier: MIT
+ *
+ * Derived from Rust's core::num::dec2flt.
+ */
+
+define double NAN64 = 0.0/0.0;  // QNaN
+define double INF64 = 1.0/0.0;
+
+struct FPConsts {
+    int MANTISSA_EXPLICIT_BITS;
+    int MIN_EXPONENT_ROUND_TO_EVEN;
+    int MAX_EXPONENT_ROUND_TO_EVEN;
+    int MINIMUM_EXPONENT;
+    int INFINITE_POWER;
+    int SMALLEST_POWER_OF_TEN;
+    int LARGEST_POWER_OF_TEN;
+}
+
+define F32_MANTISSA_EXPLICIT_BITS = 23;
+define F64_MANTISSA_EXPLICIT_BITS = 52;
+
+const FPConsts F32_CONSTS = {
+    MANTISSA_EXPLICIT_BITS           : F32_MANTISSA_EXPLICIT_BITS,
+    MIN_EXPONENT_ROUND_TO_EVEN       : -17,
+    MAX_EXPONENT_ROUND_TO_EVEN       : 10,
+    MINIMUM_EXPONENT                 : -127,
+    INFINITE_POWER                   : 0xFF,
+    SMALLEST_POWER_OF_TEN            : -65,
+    LARGEST_POWER_OF_TEN             : 38,
+};
+
+const FPConsts F64_CONSTS = {
+    MANTISSA_EXPLICIT_BITS           : F64_MANTISSA_EXPLICIT_BITS,
+    MIN_EXPONENT_ROUND_TO_EVEN       : -4,
+    MAX_EXPONENT_ROUND_TO_EVEN       : 23,
+    MINIMUM_EXPONENT                 : -1023,
+    INFINITE_POWER                   : 0x7FF,
+    SMALLEST_POWER_OF_TEN            : -342,
+    LARGEST_POWER_OF_TEN             : 308,
+};
+
+u64 read_u64(const ubyte[] s)
+{
+    assert(s.len >= 8);
+
+    #setup[!little_endian]
+    assert(0, "TODO: swap bytes");
+
+    return *cast(u64*) s.ptr;
+}
+
+void write_u64_unchecked(ubyte[] s, u64 value)
+{
+    assert(s.len >= 8);
+    *cast(u64*) s.ptr = u64_to_le(value);    // write unaligned
+}
+
+u64 u64_to_le(u64 x)
+{
+    #setup[!little_endian]
+    assert(0, "TODO: swap bytes");
+
+    return x;
+}
+
+/*
+ * Determine if 8 bytes are all decimal digits.
+ * This does not care about the order of the bytes.
+ */
+bool is_8digits(u64 v)
+{
+    u64 a = v + 0x4646_4646_4646_4646;
+    u64 b = v - 0x3030_3030_3030_3030;
+    return (a | b) & 0x8080_8080_8080_8080 == 0;
+}
+
+/*
+ * A custom 64-bit floating point type, representing `f * 2^e`.
+ * e is biased, so it be directly shifted into the exponent bits.
+ */
+struct BiasedFP {
+    u64 f; // The significant digits.
+    int e; // The biased, binary exponent.
+}
+
+double biasedfp_to_native64(BiasedFP x)
+{
+    u64 word = x.f;
+    word |= (cast(u64) x.e) << F64_MANTISSA_EXPLICIT_BITS;
+    return *cast(double*) &word;
+}
+
+float biasedfp_to_native32(BiasedFP x)
+{
+    u64 word = x.f;
+    word |= (cast(u64) x.e) << F32_MANTISSA_EXPLICIT_BITS;
+    uint b32 = cast(uint) (word & 0xFFFFFFFF);
+    return *cast(float*) &b32;
+}
