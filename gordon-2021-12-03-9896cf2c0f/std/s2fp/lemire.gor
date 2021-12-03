@@ -1,0 +1,208 @@
+/*
+ * Copyright (c) 2021 Tero Hänninen.
+ * SPDX-License-Identifier: MIT
+ *
+ * Derived from Rust's core::num::dec2flt.
+ *
+ * This is an implementation of the Eisel-Lemire algorithm
+ * described in:  https://arxiv.org/abs/2101.11408.pdf
+ *
+ * Lemire's original C++ implementation:
+ * https://github.com/fastfloat/fast_float.git
+ */
+
+#define no128mul;
+
+import self.s2fp.common;
+import self.s2fp.pow5tab;
+
+BiasedFP compute_float(i64 q, u64 w, ref const FPConsts fc)
+{
+    BiasedFP fp_zero  = {f: 0, e: 0};
+    BiasedFP fp_inf   = {f: 0, e: fc.INFINITE_POWER};
+    BiasedFP fp_error = {f: 0, e: -1};
+
+    // Short-circuit if the value can only be a literal 0 or infinity.
+    if (w == 0 || q < fc.SMALLEST_POWER_OF_TEN) {
+        return fp_zero;
+    } else if (q > fc.LARGEST_POWER_OF_TEN) {
+        return fp_inf;
+    }
+    // Normalize our significant digits, so the most-significant bit is set.
+    uint lz = count_lz(w);
+    w <<= lz;
+    u64 lo, hi;
+    compute_product_approx(q, w, fc.MANTISSA_EXPLICIT_BITS + 3, &lo, &hi);
+    if (lo == 0xFFFF_FFFF_FFFF_FFFF) {
+        // If we have failed to approximate w x 5^-q with our 128-bit value.
+        // Since the addition of 1 could lead to an overflow which could then
+        // round up over the half-way point, this can lead to improper rounding
+        // of a float.
+        //
+        // However, this can only occur if q ∈ [-27, 55]. The upper bound of q
+        // is 55 because 5^55 < 2^128, however, this can only happen if 5^q > 2^64,
+        // since otherwise the product can be represented in 64-bits, producing
+        // an exact result. For negative exponents, rounding-to-even can
+        // only occur if 5^-q < 2^64.
+        //
+        // For detailed explanations of rounding for negative exponents, see
+        // <https://arxiv.org/pdf/2101.11408.pdf#section.9.1>. For detailed
+        // explanations of rounding for positive exponents, see
+        // <https://arxiv.org/pdf/2101.11408.pdf#section.8>.
+        bool inside_safe_exponent = (q >= -27) && (q <= 55);
+        if (!inside_safe_exponent) {
+            return fp_error;
+        }
+    }
+    int upperbit = cast(int) (hi >> 63);
+    u64 mantissa = hi >> (upperbit + 64 - fc.MANTISSA_EXPLICIT_BITS - 3);
+    int power2 = power(cast(int) q) + upperbit - cast(int) lz - fc.MINIMUM_EXPONENT;
+    if (power2 <= 0) {
+        if (-power2 + 1 >= 64) {
+            // Have more than 64 bits below the minimum exponent, must be 0.
+            return fp_zero;
+        }
+        // Have a subnormal value.
+        mantissa >>= -power2 + 1;
+        mantissa += mantissa & 1;
+        mantissa >>= 1;
+        power2 = cast(int) (mantissa >= (1Lu << fc.MANTISSA_EXPLICIT_BITS));
+        return cast(BiasedFP) { f: mantissa, e: power2 };
+    }
+    // Need to handle rounding ties. Normally, we need to round up,
+    // but if we fall right in between and and we have an even basis, we
+    // need to round down.
+    //
+    // This will only occur if:
+    //  1. The lower 64 bits of the 128-bit representation is 0.
+    //      IE, 5^q fits in single 64-bit word.
+    //  2. The least-significant bit prior to truncated mantissa is odd.
+    //  3. All the bits truncated when shifting to mantissa bits + 1 are 0.
+    //
+    // Or, we may fall between two floats: we are exactly halfway.
+    if (lo <= 1
+        && q >= fc.MIN_EXPONENT_ROUND_TO_EVEN
+        && q <= fc.MAX_EXPONENT_ROUND_TO_EVEN
+        && (mantissa & 3) == 1
+        && (mantissa << (upperbit + 64 - fc.MANTISSA_EXPLICIT_BITS - 3)) == hi)
+    {
+        // Zero the lowest bit, so we don't round up.
+        mantissa &= ~1Lu;
+    }
+    // Round-to-even, then shift the significant digits into place.
+    mantissa += mantissa & 1;
+    mantissa >>= 1;
+    if (mantissa >= (2Lu << fc.MANTISSA_EXPLICIT_BITS)) {
+        // Rounding up overflowed, so the carry bit is set. Set the
+        // mantissa to 1 (only the implicit, hidden bit is set) and
+        // increase the exponent.
+        mantissa = 1Lu << fc.MANTISSA_EXPLICIT_BITS;
+        power2 += 1;
+    }
+    // Zero out the hidden bit.
+    mantissa &= ~(1Lu << fc.MANTISSA_EXPLICIT_BITS);
+    if (power2 >= fc.INFINITE_POWER) {
+        // Exponent is above largest normal value, must be infinite.
+        return fp_inf;
+    }
+    return cast(BiasedFP) { f: mantissa, e: power2 };
+}
+
+// Counts leading zeros. TODO: Use an intrinsic.
+uint count_lz(u64 x)
+{
+    define w = 64;
+    if (x == 0) return w;
+    u64 t = 1L << (w - 1);
+    u64 r = 0;
+    while ((x & t) == 0) {
+        t = t >> 1;
+        r = r + 1;
+    }
+    return cast(uint) r;
+}
+
+// Calculate a base 2 exponent from a decimal exponent.
+// This uses a pre-computed integer approximation for
+// log2(10), where 217706 / 2^16 is accurate for the
+// entire range of non-finite decimal exponents.
+int power(int q)
+{
+    return ((q * (152_170 + 65536)) >> 16) + 63;
+}
+
+void full_multiplication(u64 a, u64 b, out u64 lo, out u64 hi)
+{
+    // TODO: 128-bit mul.
+
+    //u128 r = cast(i128) a * cast(i128) b;
+    //lo = cast(u64) r;
+    //hi = cast(u64) (r >> 64);
+
+    #setup[no128mul] {
+        lo = _umul128(a, b, &hi);
+    } #else {
+        #assert(0);
+    }
+}
+
+#setup[no128mul] {
+    #inline u64 __emulu(uint x, uint y)
+    {
+      return x * cast(u64) y;
+    }
+
+    #inline u64 _umul128(u64 ab, u64 cd, u64 *hi)
+    {
+      u64 ad    = __emulu(cast(uint) (ab >> 32), cast(uint) cd);
+      u64 bd    = __emulu(cast(uint) ab, cast(uint) cd);
+      u64 adbc  = ad + __emulu(cast(uint) ab, cast(uint) (cd >> 32));
+      u64 adbc_carry = !!(adbc < ad);
+      u64 lo    = bd + (adbc << 32);
+      *hi = __emulu(cast(uint) (ab >> 32),
+          cast(uint) (cd >> 32)) + (adbc >> 32) + (adbc_carry << 32) + !!(lo < bd);
+      return lo;
+    }
+}
+
+// This will compute or rather approximate w * 5**q and return a pair of 64-bit words
+// approximating the result, with the "high" part corresponding to the most significant
+// bits and the low part corresponding to the least significant bits.
+void compute_product_approx(i64 q, u64 w, usz precision, out u64 outlo, out u64 outhi)
+{
+    assert(q >= cast(i64) SMALLEST_POWER_OF_FIVE);
+    assert(q <= cast(i64) LARGEST_POWER_OF_FIVE);
+    assert(precision <= 64);
+
+    u64 mask = (precision < 64)
+             ? 0xFFFF_FFFF_FFFF_FFFF_Lu >> precision
+             : 0xFFFF_FFFF_FFFF_FFFF_Lu;
+
+    // 5^q < 2^64, then the multiplication always provides an exact value.
+    // That means whenever we need to round ties to even, we always have
+    // an exact value.
+    usz   index = cast(usz) (q - cast(i64) SMALLEST_POWER_OF_FIVE);
+    u128_t pof = POWER_OF_FIVE_128[index];
+    // The Rust code seems to have these names swapped.
+    u64 hi5 = pof.hi;
+    u64 lo5 = pof.lo;
+    // Only need one multiplication as long as there is 1 zero but
+    // in the explicit mantissa bits, +1 for the hidden bit, +1 to
+    // determine the rounding direction, +1 for if the computed
+    // product has a leading zero.
+    u64 first_lo, first_hi;
+    full_multiplication(w, hi5, &first_lo, &first_hi);
+    if ((first_hi & mask) == mask) {
+        // Need to do a second multiplication to get better precision
+        // for the lower product. This will always be exact
+        // where q is < 55, since 5^55 < 2^128. If this wraps,
+        // then we need to round up the hi product.
+        u64 second_lo, second_hi;
+        full_multiplication(w, lo5, &second_lo, &second_hi);
+        first_lo = first_lo + second_hi;
+        if (second_hi > first_lo)
+            first_hi += 1;
+    }
+    outlo = first_lo;
+    outhi = first_hi;
+}

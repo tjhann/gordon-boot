@@ -1,0 +1,14 @@
+/*
+ * Copyright (c) 2021 Tero Hänninen.
+ * SPDX-License-Identifier: MIT
+ *
+ * Unit tests.
+ */
+
+import self.s2fp.test;
+
+int main()
+{
+    test_s2fp();
+    return 0;
+}
