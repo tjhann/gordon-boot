@@ -1,0 +1,4 @@
+gnc 0.2 / gordon-2021-12-21-a099010b11:
+
+43a1adb53c69feb731acc2c027e3781bd4368463 gnc
+87bbf70273e0aee88b728ea7e5df2c4a26d07ef8 libgordon.a

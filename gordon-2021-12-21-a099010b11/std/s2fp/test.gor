@@ -1,0 +1,538 @@
+/*
+ * Copyright (c) 2021 Tero Hänninen.
+ * SPDX-License-Identifier: MIT
+ *
+ * Define 's2fp_test_quick' to disable all big test loops.
+ */
+
+import self.s2fp;
+import self.s2fp.tests_lemire <- void;
+import self.s2fp.common;
+import self.s2fp.parse;
+
+extern(C) {
+    enum FILE;
+    int fflush(FILE* s);
+    int puts(const ubyte* s);
+    int printf(const ubyte* fmt, ...);
+    int snprintf(ubyte *str, usz size, const ubyte *format, ...);
+    void exit(int status);
+}
+
+define NANMASK64 = 0x7FFFFFFFFFFFFFFF;
+define NANBITS64 = 0x7FF8000000000000;
+define NANMASK32 = 0x7FFFFFFF;
+define NANBITS32 = 0x7FC00000;
+
+void test_s2fp()
+{
+    puts("S2FP: RUNNING TESTS...");
+
+    test_format();
+    test_fallback();
+    test_underscores();
+    test_extremes();
+    test_special();
+    test_double_rounding();
+    tests_lemire();
+
+    puts("S2FP: ALL OK!");
+}
+
+struct Case {
+    u64             bits;
+    const ubyte[]   str;
+}
+
+struct Case32 {
+    uint            bits;
+    const ubyte[]   str;
+}
+
+macro check_case(cs)
+{
+    verify(cs.bits, cs.str)
+}
+
+void fail(const ubyte* msg, const ubyte* file = #file, int line = #line,
+          const ubyte* msg2 = null)
+{
+    puts("---------------------");
+    printf("%s:%d: failure: %s\n", file, line, msg);
+    if (msg2) printf("   %s\n", msg2);
+    exit(1);
+}
+
+void verify_extreme(u64 bits, const ubyte[] s, int line = #line, const ubyte* file = #file)
+{
+    isz n;
+    double x = parsef64(s, &n, PF_EXTREMES);
+    if (n != s.len)             fail(s.ptr, file, line, "wrong length");
+    if (*cast(u64*) &x != bits) fail(s.ptr, file, line, "wrong bits");
+}
+
+void verify32_extreme(uint bits, const ubyte[] s, int line = #line, const ubyte* file = #file)
+{
+    isz n;
+    float x = parsef32(s, &n, PF_EXTREMES);
+    if (n != s.len)              fail(s.ptr, file, line, "wrong length");
+    if (*cast(uint*) &x != bits) fail(s.ptr, file, line, "wrong bits");
+}
+
+void verify(u64 bits, const ubyte[] s, int line = #line, const ubyte* file = #file)
+{
+    isz n;
+    double x = parsef64(s, &n);
+    if (n != s.len)             fail(s.ptr, file, line, "wrong length");
+    if (*cast(u64*) &x != bits) fail(s.ptr, file, line, "wrong bits");
+}
+
+void verify32(uint bits, const ubyte[] s, int line = #line, const ubyte* file = #file)
+{
+    isz n;
+    float x = parsef32(s, &n);
+    if (n != s.len)              fail(s.ptr, file, line, "wrong length");
+    if (*cast(uint*) &x != bits) fail(s.ptr, file, line, "wrong bits");
+}
+
+void verifyx(u64 bits64, uint bits32, const ubyte[] s, isz len, int line = #line,
+                                                       const ubyte* file = #file)
+{
+    isz n, m;
+    double x = parsef64(s, &n);
+    float  y = parsef32(s, &m);
+    if (n != len)               fail(s.ptr, file, line, "wrong length");
+    if (m != len)               fail(s.ptr, file, line, "wrong length");
+    if (*cast(u64*) &x != bits64) fail(s.ptr, file, line, "wrong bits (f64)");
+    if (*cast(uint*) &y != bits32) fail(s.ptr, file, line, "wrong bits (f32)");
+}
+
+isz verify_nan(const ubyte[] s, int line = #line, const ubyte* file = #file)
+{
+    isz n, m;
+    double x = parsef64(s, &n);
+    float  y = parsef32(s, &m);
+    u64 xbits = *cast(u64*) &x;
+    uint ybits = *cast(uint*) &y;
+    if (!n) fail(s.ptr, file, line, "parsef64 refused to parse");
+    if (!m) fail(s.ptr, file, line, "parsef32 refused to parse");
+    if (xbits & NANMASK64 != NANBITS64) fail(s.ptr, file, line, "not nan64");
+    if (ybits & NANMASK32 != NANBITS32) fail(s.ptr, file, line, "not nan32");
+    return n;
+}
+
+void verify_fallback(u64 bits64, uint bits32, const ubyte[] s, int line = #line,
+                                                      const ubyte* file = #file)
+{
+    verify_fallback_x(bits64, bits32, s, s.len, line, file);
+}
+
+void verify_fallback_x(u64 bits64, uint bits32, const ubyte[] s, isz len,
+                             int line = #line, const ubyte* file = #file)
+{
+    isz n, m;
+    BiasedFP f64 = parse_fallback(s, &n, &F64_CONSTS);  // won't parse sign
+    BiasedFP f32 = parse_fallback(s, &m, &F32_CONSTS);  // won't parse sign
+    double x = biasedfp_to_native64(f64);
+    float  y = biasedfp_to_native32(f32);
+    if (n != len) fail(s.ptr, file, line, "wrong length from fallback");
+    if (m != len) fail(s.ptr, file, line, "wrong length from fallback");
+    if (*cast(u64*) &x != bits64) fail(s.ptr, file, line, "wrong bits from fallback");
+    if (*cast(uint*) &y != bits32) fail(s.ptr, file, line, "wrong bits from fallback");
+}
+
+void reject(const ubyte[] s, int line = #line, const ubyte* file = #file)
+{
+    isz n, m;
+    double x = parsef64(s, &n);
+    float y = parsef32(s, &m);
+    if (n) fail(s.ptr, file, line, "parsef64 failed to reject");
+    if (m) fail(s.ptr, file, line, "parsef32 failed to reject");
+}
+
+void reject32_extreme(const ubyte[] s, int line = #line, const ubyte* file = #file)
+{
+    isz m;
+    float y = parsef32(s, &m);
+    if (m) fail(s.ptr, file, line, "parsef32 failed to reject");
+}
+
+bool isnormal(double x) // not zero, subnormal, infinite or nan
+{
+    define u64 EXP_MASK = 0x7ff0000000000000;
+
+    u64 bits = *cast(u64*) &x;
+    u64 exp  = bits & EXP_MASK;
+
+    return exp && exp != EXP_MASK;
+}
+
+bool isnormal32(float x) // not zero, subnormal, infinite or nan
+{
+    define uint EXP_MASK = 0x7f800000;
+
+    uint bits = *cast(uint*) &x;
+    uint exp  = bits & EXP_MASK;
+
+    return exp && exp != EXP_MASK;
+}
+
+bool isnan(double x)
+{
+    define u64 EXP_MASK = 0x7ff0000000000000;
+    define u64 MAN_MASK = 0x000fffffffffffff;
+
+    u64 bits = *cast(u64*) &x;
+    u64 exp  = bits & EXP_MASK;
+    u64 man  = bits & MAN_MASK;
+
+    return exp == EXP_MASK && man > 0;
+}
+
+double copysign(double mag, double sign) // returns magnitude of mag, sign of sign
+{
+    u64 m = 0x7fffffff_ffffffff & *cast(u64*) &mag;
+    u64 s = 0x80000000_00000000 & *cast(u64*) &sign;
+    u64 r = s | m;
+    return r;
+}
+
+bool signbit(double x)
+{
+    return ((*cast(u64*) &x) >> 63) > 0;
+}
+
+void test_format()
+{
+    puts("format: begin...");
+
+    reject("");
+    reject(".");
+    reject("-");
+    reject("-.");
+    reject("+");
+    reject("+1");
+    reject("e");
+    reject("e2");
+    reject("e+2");
+    reject("e-2");
+    reject(".e-2");
+    reject("abc");
+    reject("x3");
+
+    // basic cases (non-scientific notation)
+
+    verify(0x0000000000000000, "0.0");
+    verify(0x0000000000000000, "0");
+    verify(0x0000000000000000, "0.");
+    verify(0x0000000000000000, ".0");
+    verify(0x8000000000000000, "-0.0");
+    verify(0x8000000000000000, "-0");
+    verify(0xbfe6666666666666, "-.7");
+
+    verify32(0x00000000, "0.0");
+    verify32(0x00000000, "0");
+    verify32(0x00000000, "0.");
+    verify32(0x00000000, ".0");
+    verify32(0x80000000, "-0.0");
+    verify32(0x80000000, "-0");
+    verify32(0xbf333333, "-.7");
+
+    if (verify_nan("nan") != 3) fail("nan");
+    if (verify_nan("-nan") != 4) fail("-nan");
+    verify_nan("NAN");
+    verify_nan("NaN");
+    verify_nan("nAn");
+    verify_nan("-nAn");
+
+    verify(0x7FF0000000000000, "inf");
+    verify(0x7FF0000000000000, "INF");
+    verify(0x7FF0000000000000, "InF");
+    verify(0x7FF0000000000000, "iNf");
+    verify(0xFFF0000000000000, "-iNf");
+    verify(0xFFF0000000000000, "-inf");
+
+    verify32(0x7F800000, "inf");
+    verify32(0x7F800000, "INF");
+    verify32(0x7F800000, "InF");
+    verify32(0x7F800000, "iNf");
+    verify32(0xFF800000, "-iNf");
+    verify32(0xFF800000, "-inf");
+
+    // scientific notation
+
+    verify(0x40d3880000000000, "2e4");
+    verify(0x40d3880000000000, "2E4");
+    verify(0x40d3880000000000, "2e+4");
+    verify(0x40d3880000000000, "2E+4");
+    verify(0x3f2a36e2eb1c432d, "2e-4");
+    verify(0x3f2a36e2eb1c432d, "2E-4");
+    verify(0x4292309ce5400000, "5e0012");
+
+    verify32(0x469c4000, "2e4");
+    verify32(0x469c4000, "2E4");
+    verify32(0x469c4000, "2e+4");
+    verify32(0x469c4000, "2E+4");
+    verify32(0x3951b717, "2e-4");
+    verify32(0x3951b717, "2E-4");
+    verify32(0x549184e7, "5e0012");
+
+    verify(0x40d3880000000000, "2.0e4");
+    verify(0x40d3880000000000, "2.0E4");
+    verify(0x40d3880000000000, "2.0e+4");
+    verify(0x40d3880000000000, "2.0E+4");
+    verify(0x3f2a36e2eb1c432d, "2.0e-4");
+    verify(0x3f2a36e2eb1c432d, "2.0E-4");
+    verify(0x4292309ce5400000, "5.0e0012");
+    verify(0x4008000000000000, "003");
+    verify(0x44ada56a4b0835c0, "7.e22");
+
+    verify32(0x469c4000, "2.0e4");
+    verify32(0x469c4000, "2.0E4");
+    verify32(0x469c4000, "2.0e+4");
+    verify32(0x469c4000, "2.0E+4");
+    verify32(0x3951b717, "2.0e-4");
+    verify32(0x3951b717, "2.0E-4");
+    verify32(0x549184e7, "5.0e0012");
+    verify32(0x40400000, "003");
+    verify32(0x656d2b52, "7.e22");
+
+    // trailing characters
+
+    verifyx(0x0000000000000000, 0x00000000, "0xxx", 1);
+    verifyx(0x4008000000000000, 0x40400000, "3x", 1);
+    verifyx(0x4008000000000000, 0x40400000, "3kuha", 1);
+    verifyx(0x4008000000000000, 0x40400000, "3.k", 2);
+    verifyx(0x4008000000000000, 0x40400000, "3.0k", 3);
+    verifyx(0xc008000000000000, 0xc0400000, "-3.0k", 4);
+    verifyx(0x0000000000000000, 0x00000000, "0.f", 2);
+    verifyx(0x4008000000000000, 0x40400000, "3-", 1);
+
+    verifyx(0x4008000000000000, 0x40400000, "3e", 1);
+    verifyx(0xc008000000000000, 0xc0400000, "-3E", 2);
+    verifyx(0x4008000000000000, 0x40400000, "3.0e", 3);
+    verifyx(0xc008000000000000, 0xc0400000, "-3.0e", 4);
+    verifyx(0x4008000000000000, 0x40400000, "3e-", 1);
+    verifyx(0x4008000000000000, 0x40400000, "3e+", 1);
+    verifyx(0x4008000000000000, 0x40400000, "3E-", 1);
+    verifyx(0x4008000000000000, 0x40400000, "3E+", 1);
+    verifyx(0x40091eb851eb851f, 0x4048f5c3, "3.14e", 4);
+    verifyx(0x4008000000000000, 0x40400000, "3e.23", 1);
+
+    isz n = verify_nan("nano"); // please send some...
+    if (n != 3) fail("nano");
+    verifyx(0x7FF0000000000000, 0x7f800000, "info", 3); // nano.org
+
+    //----------------------------------------
+
+    // Try with underscores.
+
+    puts("format: ok");
+}
+
+const Case[$] EXTREMES = [
+    {0x7ff0000000000000, "1e+400"},
+    {0x0000000000000000, "1e-400"},
+    {0x0000000000000000, "2.4703282292062326e-324"},
+    // the smallest number resolving to inf
+    {0x7ff0000000000000, "179769313486231580793728971405303415079934132710037826936173778980444968292764750946649017977587207096330286416692887910946555547851940402630657488671505820681908902000708383676273854845817711531764475730270069855571366959622842914819860834936475292719074168444365510704342711559699508093042880177904174497792"},
+    {0x0000000000000000, "2.4703282292062327208828439643411068618252990130716238221279284125033775363510437593264991818081799618989828234772285886546332835517796989819938739800539093906315035659515570226392290858392449105184435931802849936536152500319370457678249219365623669863658480757001585769269903706311928279558551332927834338409351978015531246597263579574622766465272827220056374006485499977096599470454020828166226237857393450736339007967761930577506740176324673600968951340535537458516661134223766678604162159680461914467291840300530057530849048765391711386591646239524912623653881879636239373280423891018672348497668235089863388587925628302755995657524455507255189313690836254779186948667994968324049705821028513185451396213837722826145437693412532098591327667236328125e-324"},
+    {0x0000000000000000, "2183167012312112312312.23538020374420446192e-370"},
+    {0x7ff0000000000000, "1438456663141390273526118207642235581183227845246331231162636653790368152091394196930365828634687637948157940776599182791387527135353034738357134110310609455693900824193549772792016543182680519740580354365467985440183598701312257624545562331397018329928613196125590274187720073914818062530830316533158098624984118889298281371812288789537310599037529113415438738954894752124724983067241108764488346454376699018673078404751121414804937224240805993123816932326223683090770561597570457793932985826162604255884529134126396282202126526253389383421806727954588525596114379801269094096329805054803089299736996870951258573010877404407451953846698609198213926882692078557033228265259305481198526059813164469187586693257335779522020407645498684263339921905227556616698129967412891282231685504660671277927198290009824680186319750978665734576683784255802269708917361719466043175201158849097881370477111850171579869056016061666173029059588433776015644439705050377554277696143928278093453792803846252715966016733222646442382892123940052441346822429721593884378212558701004356924243030059517489346646577724622498919752597382095222500311124181823512251071356181769376577651390028297796156208815375089159128394945710515861334486267101797497111125909272505194792870889617179758703442608016143343262159998149700606597792535574457560429226974273443630323818747730771316763398572110874959981923732463076884528677392654150010269822239401993427482376513231389212353583573566376915572650916866553612366187378959554983566712767093372906030188976220169058025354973622211666504549316958271880975697143546564469806791358707318873075708383345004090151974068325838177531266954177406661392229801349994695941509935655355652985723782153570084089560139142231.738475042362596875449154552392299548947138162081694168675340677843807613129780449323363759027012972466987370921816813162658754726545121090545507240267000456594786540949605260722461937870630634874991729398208026467698131898691830012167897399682179601734569071423681e-733"},
+];
+
+const Case32[$] EXTREMES32 = [
+    {0x7f800000, "0.1e9999999999999999999999999999"},
+    {0x00000000, "7.0060e-46"},
+];
+
+void test_extremes()
+{
+    puts("extremes: begin...");
+
+    for (int i; i < EXTREMES32.len; i++) {
+        verify32_extreme(EXTREMES32[i].bits, EXTREMES32[i].str);
+        reject32_extreme(EXTREMES32[i].str); // no PF_EXTREMES
+    }
+
+    for (int i; i < EXTREMES.len; i++) {
+        verify_extreme(EXTREMES[i].bits, EXTREMES[i].str);
+        reject(EXTREMES[i].str); // no PF_EXTREMES
+    }
+
+
+    puts("extremes: ok");
+}
+
+void test_special()
+{
+    puts("special: begin...");
+
+    verify(0x01752a64e34ba0d3, "1234567890123456789012345678901234567890e-340");
+    verify(0x0000000000000000, "0.000e+00");
+    verify(0x000fffffffffffff, "2.225073858507201136057409796709131975934819546351645648023426109724822222021076945516529523908135087914149158913039621106870086438694594645527657207407820621743379988141063267329253552286881372149012981122451451889849057222307285255133155755015914397476397983411801999323962548289017107081850690630666655994938275772572015763062690663332647565300009245888316433037779791869612049497390377829704905051080609940730262937128958950003583799967207254304360284078895771796150945516748243471030702609144621572289880258182545180325707018860872113128079512233426288368622321503775666622503982534335974568884423900265498198385487948292206894721689831099698365846814022854243330660339850886445804001034933970427567186443383770486037861622771738545623065874679014086723327636718749999999999999999999999999999999999999e-308");
+    verify(0x3ff199999999999a, "1.100000000000000088817841970012523233890533447265626");
+    verify(0x432a9d28ff412a75, "3.7455744005952583e15");
+    verify(0xbfed35696e58a32f, "-0.91276999999999997026378650843980722129344940185546876");
+    verify(0x4458180d5bad2e3e, "1777820000000000000001");
+    verify(0x0000000000000001, "2.4703282292062327208828439643411068618252990130716238221279284125033775363510437593264991818081799618989828234772285886546332835517796989819938739800539093906315035659515570226392290858392449105184435931802849936536152500319370457678249219365623669863658480757001585769269903706311928279558551332927834338409351978015531246597263579574622766465272827220056374006485499977096599470454020828166226237857393450736339007967761930577506740176324673600968951340535537458516661134223766678604162159680461914467291840300530057530849048765391711386591646239524912623653881879636239373280423891018672348497668235089863388587925628302755995657524455507255189313690836254779186948667994968324049705821028513185451396213837722826145437693412532098591327667236328125001e-324");
+    verify(0x0000000000000001, "7.4109846876186981626485318930233205854758970392148714663837852375101326090531312779794975454245398856969484704316857659638998506553390969459816219401617281718945106978546710679176872575177347315553307795408549809608457500958111373034747658096871009590975442271004757307809711118935784838675653998783503015228055934046593739791790738723868299395818481660169122019456499931289798411362062484498678713572180352209017023903285791732520220528974020802906854021606612375549983402671300035812486479041385743401875520901590172592547146296175134159774938718574737870961645638908718119841271673056017045493004705269590165763776884908267986972573366521765567941072508764337560846003984904972149117463085539556354188641513168478436313080237596295773983001708984374999e-324");
+    verify(0x0000000000000002, "7.4109846876186981626485318930233205854758970392148714663837852375101326090531312779794975454245398856969484704316857659638998506553390969459816219401617281718945106978546710679176872575177347315553307795408549809608457500958111373034747658096871009590975442271004757307809711118935784838675653998783503015228055934046593739791790738723868299395818481660169122019456499931289798411362062484498678713572180352209017023903285791732520220528974020802906854021606612375549983402671300035812486479041385743401875520901590172592547146296175134159774938718574737870961645638908718119841271673056017045493004705269590165763776884908267986972573366521765567941072508764337560846003984904972149117463085539556354188641513168478436313080237596295773983001708984375e-324");
+    verify(0x36c6000000000000, "7.7071415537864938e-45");
+    verify(0x0006c9a143590c14,
+            "94393431193180696942841837085033647913224148539854e-358");
+    verify(0x3ff0000000000000,
+            "99999999999999994487665465554760717039532578546e-47");
+    verify(0x44b52d02c7e14af6, "10000000000000000000000000000000000000000e-17");
+    verify(0x0007802665fd9600,          "104308485241983990666713401708072175773165034278685682646111762292409330928739751702404658197872319129036519947435319418387839758990478549477777586673075945844895981012024387992135617064532141489278815239849108105951619997829153633535314849999674266169258928940692239684771590065027025835804863585454872499320500023126142553932654370362024104462255244034053203998964360882487378334860197725139151265590832887433736189468858614521708567646743455601905935595381852723723645799866672558576993978025033590728687206296379801363024094048327273913079612469982585674824156000783167963081616214710691759864332339239688734656548790656486646106983450809073750535624894296242072010195710276073042036425579852459556183541199012652571123898996574563824424330960027873516082763671875e-1075");
+    verify(0x4025cccccccccccd, "10.900000000000000012345678912345678912345");
+
+    puts("special: ok");
+}
+
+void test_double_rounding()
+{
+    // This is more to document, I guess.
+
+    auto s = "0.50000008940696713";
+
+    isz n, m;
+    double a = parsef64(s, &n);
+    float  b = parsef32(s, &m);
+    float  c = a;  // double rounding error (1 ULP)
+
+    assert(*cast(u64*) &a == 0x3fe0000030000000);
+    assert(*cast(uint*) &b == 0x3f000001);
+    assert(*cast(uint*) &c == 0x3f000002);  // 1 ULP off
+}
+
+void test_fallback()
+{
+    puts("fallback: begin...");
+
+    // Mind that the fallback function won't chew a sign.
+
+    verify_fallback(0x0000000000000000, 0x00000000, "0.0");
+    verify_fallback(0x0000000000000000, 0x00000000, "0");
+    verify_fallback(0x0000000000000000, 0x00000000, "0.");
+    verify_fallback(0x3f2a36e2eb1c432d, 0x3951b717, "2e-4");
+    verify_fallback(0x40d3880000000000, 0x469c4000, "2e+4");
+    verify_fallback(0x40d3880000000000, 0x469c4000, "2e4");
+    verify_fallback(0x40d3880000000000, 0x469c4000, "2E4");
+    verify_fallback(0x4292309ce5400000, 0x549184e7, "5e0012");
+
+    verify_fallback_x(0x0000000000000000, 0x00000000, "0.0q", 3);
+    verify_fallback_x(0x0000000000000000, 0x00000000, "0.f", 2);
+    verify_fallback_x(0x4008000000000000, 0x40400000, "3x", 1);
+
+    verify_fallback_x(0x4008000000000000, 0x40400000, "3e", 1);
+    verify_fallback_x(0x4008000000000000, 0x40400000, "3.0e", 3);
+    verify_fallback_x(0x4008000000000000, 0x40400000, "3e-", 1);
+    verify_fallback_x(0x4008000000000000, 0x40400000, "3e+", 1);
+    verify_fallback_x(0x4008000000000000, 0x40400000, "3E-", 1);
+    verify_fallback_x(0x4008000000000000, 0x40400000, "3E+", 1);
+
+    puts("fallback: ok");
+}
+
+struct UnderscoreCase {
+    const ubyte[] s;
+    // underscores *not* allowed
+    isz           len;  // length
+    u64           b64;  // bits of double result
+    uint          b32;  // bits of float result
+    // underscores allowed
+    isz           lenu;  // length
+    u64           ub64;  // bits of double result
+    uint          ub32;  // bits of float result
+}
+
+const UnderscoreCase[$] UCASES_SIGN =
+[              //--------UNDERSCORES DENIED---------|--------UNDERSCORES ALLOWED--------
+{  "-_123456.0" ,  0, 0x0000000000000000, 0x00000000, 10, 0xc0fe240000000000, 0xc7f12000},
+];
+
+const UnderscoreCase[$] UCASES_NO_SIGN =
+[              //--------UNDERSCORES DENIED---------|--------UNDERSCORES ALLOWED--------
+{            "_",  0, 0x0000000000000000, 0x00000000,  0, 0x0000000000000000, 0x00000000},
+{    "_123456.0",  0, 0x0000000000000000, 0x00000000,  9, 0x40fe240000000000, 0x47f12000},
+{    "123_456.0",  3, 0x405ec00000000000, 0x42f60000,  9, 0x40fe240000000000, 0x47f12000},
+{    "123456._0",  7, 0x40fe240000000000, 0x47f12000,  9, 0x40fe240000000000, 0x47f12000},
+{    "123456._4",  7, 0x40fe240000000000, 0x47f12000,  9, 0x40fe240666666666, 0x47f12033},
+{ "000123456._4", 10, 0x40fe240000000000, 0x47f12000, 12, 0x40fe240666666666, 0x47f12033},
+{"0_00123456._4",  1, 0x0000000000000000, 0x00000000, 13, 0x40fe240666666666, 0x47f12033},
+{"_000123456._4",  0, 0x0000000000000000, 0x00000000, 13, 0x40fe240666666666, 0x47f12033},
+{   "123456.0_4",  8, 0x40fe240000000000, 0x47f12000, 10, 0x40fe2400a3d70a3d, 0x47f12005},
+{  "123456.0_e2",  8, 0x40fe240000000000, 0x47f12000, 11, 0x41678c2000000000, 0x4b3c6100},
+
+{LONG_UND1, 8, 0x3ff587e5a78f25a2, 0x3fac3f2d, LONG_UND1.len, 0x3ff587e627ef2ff3, 0x3fac3f31},
+{LONG_UND2, 3, 0x405ec00000000000, 0x42f60000, LONG_UND2.len, 0x4132d6877a6d9756, 0x4996b43c},
+];
+
+define LONG_UND1 = "1.345678_4782347283478234238472384";
+define LONG_UND2 = "123_4567.4782347283478234238472384";
+
+void test_parsef_underscored(const UnderscoreCase[] cases)
+{
+    for (int i; i < cases.len; i++) {
+        auto cs = &cases[i];
+
+        isz n, m, nu, mu;
+        double x = parsef64(cs.s, &n);
+        float  y = parsef32(cs.s, &m);
+        double xu = parsef64(cs.s, &nu, PF_UNDERSCORE);
+        float  yu = parsef32(cs.s, &mu, PF_UNDERSCORE);
+
+        check(n == cs.len, cs.s.ptr);
+        check(m == cs.len, cs.s.ptr);
+        check(nu == cs.lenu, cs.s.ptr);
+        check(mu == cs.lenu, cs.s.ptr);
+        check(*cast(u64*) &x == cs.b64, cs.s.ptr);
+        check(*cast(uint*) &y == cs.b32, cs.s.ptr);
+        check(*cast(u64*) &xu == cs.ub64, cs.s.ptr);
+        check(*cast(uint*) &yu == cs.ub32, cs.s.ptr);
+    }
+}
+
+void test_underscores()
+{
+    puts("underscores: begin...");
+
+    test_parsef_underscored(UCASES_SIGN);
+    test_parsef_underscored(UCASES_NO_SIGN);
+
+    // Test fallback.
+
+    for (int i; i < UCASES_NO_SIGN.len; i++) {
+        auto cs = &UCASES_NO_SIGN[i];
+
+        isz n, m, nu, mu;
+
+        BiasedFP f64 = parse_fallback(cs.s, &n, &F64_CONSTS);  // won't parse sign
+        BiasedFP f32 = parse_fallback(cs.s, &m, &F32_CONSTS);  // won't parse sign
+        double x = biasedfp_to_native64(f64);
+        float  y = biasedfp_to_native32(f32);
+        f64 = parse_fallback(cs.s, &nu, &F64_CONSTS, PF_UNDERSCORE);
+        f32 = parse_fallback(cs.s, &mu, &F32_CONSTS, PF_UNDERSCORE);
+        double xu = biasedfp_to_native64(f64);
+        float  yu = biasedfp_to_native32(f32);
+
+        check(n == cs.len, cs.s.ptr);
+        check(m == cs.len, cs.s.ptr);
+        check(nu == cs.lenu, cs.s.ptr);
+        check(mu == cs.lenu, cs.s.ptr);
+        check(*cast(u64*) &x == cs.b64, cs.s.ptr);
+        check(*cast(uint*) &y == cs.b32, cs.s.ptr);
+        check(*cast(u64*) &xu == cs.ub64, cs.s.ptr);
+        check(*cast(uint*) &yu == cs.ub32, cs.s.ptr);
+    }
+
+    puts("underscores: ok");
+}
+
+void check(bool t, const ubyte* m = "check", const ubyte* file = #file,
+                                                      int line = #line)
+{
+    if (t) return;
+    fail(m, file, line);
+}
